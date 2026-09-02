@@ -1,0 +1,406 @@
+import cv2
+import numpy as np
+from picamera2 import Picamera2
+
+# Camera resolution
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 480
+
+# Calibration points
+horizontal_points = []
+vertical_points = []
+
+# Modes:
+# "horizontal" -> click 9 horizontal boundaries
+# "vertical"   -> click 9 vertical boundaries
+# "done"       -> calibration complete
+mode = "horizontal"
+
+# Final 9x9 intersection grid
+grid = None
+
+
+def line_intersection(line1, line2):
+    """
+    Find the intersection between two lines.
+
+    line1 = ((x1, y1), (x2, y2))
+    line2 = ((x3, y3), (x4, y4))
+    """
+
+    (x1, y1), (x2, y2) = line1
+    (x3, y3), (x4, y4) = line2
+
+    denominator = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+
+    if abs(denominator) < 0.0001:
+        return None
+
+    px = (
+        (x1 * y2 - y1 * x2) * (x3 - x4)
+        - (x1 - x2) * (x3 * y4 - y3 * x4)
+    ) / denominator
+
+    py = (
+        (x1 * y2 - y1 * x2) * (y3 - y4)
+        - (y1 - y2) * (x3 * y4 - y3 * x4)
+    ) / denominator
+
+    return int(px), int(py)
+
+
+def calculate_grid():
+    """
+    Calculate all 81 intersections from the
+    9 horizontal and 9 vertical boundaries.
+    """
+
+    global grid
+
+    horizontal_lines = []
+    vertical_lines = []
+
+    # Create 9 horizontal lines
+    for i in range(0, 18, 2):
+        horizontal_lines.append(
+            (horizontal_points[i], horizontal_points[i + 1])
+        )
+
+    # Create 9 vertical lines
+    for i in range(0, 18, 2):
+        vertical_lines.append(
+            (vertical_points[i], vertical_points[i + 1])
+        )
+
+    grid = []
+
+    # Find 9x9 = 81 intersections
+    for horizontal in horizontal_lines:
+
+        row = []
+
+        for vertical in vertical_lines:
+            point = line_intersection(horizontal, vertical)
+            row.append(point)
+
+        grid.append(row)
+
+    print("\nGRID COMPLETE")
+
+    # Print the four corners of all 64 squares
+    for row in range(8):
+        for col in range(8):
+
+            TL = grid[row][col]
+            TR = grid[row][col + 1]
+            BR = grid[row + 1][col + 1]
+            BL = grid[row + 1][col]
+
+            print(
+                f"Square [{row},{col}] = "
+                f"{TL}, {TR}, {BR}, {BL}"
+            )
+
+
+def click_event(event, x, y, flags, params):
+    global mode
+
+    if event != cv2.EVENT_LBUTTONDOWN:
+        return
+
+    point = (x, y)
+
+    # ------------------------------------------------
+    # HORIZONTAL BOUNDARIES
+    # ------------------------------------------------
+
+    if mode == "horizontal":
+
+        horizontal_points.append(point)
+
+        count = len(horizontal_points)
+
+        # Every 2 clicks completes one horizontal line
+        if count % 2 == 0:
+
+            line_number = count // 2
+
+            print(
+                f"Horizontal line {line_number}/9 complete"
+            )
+
+        # 18 clicks = 9 lines
+        if len(horizontal_points) == 18:
+
+            mode = "vertical"
+
+            print("\nHORIZONTAL CALIBRATION COMPLETE")
+            print()
+            print("Now do the VERTICAL boundaries.")
+            print("Click TOP then BOTTOM.")
+            print("Work LEFT -> RIGHT.")
+            print()
+
+
+    # ------------------------------------------------
+    # VERTICAL BOUNDARIES
+    # ------------------------------------------------
+
+    elif mode == "vertical":
+
+        vertical_points.append(point)
+
+        count = len(vertical_points)
+
+        # Every 2 clicks completes one vertical line
+        if count % 2 == 0:
+
+            line_number = count // 2
+
+            print(
+                f"Vertical line {line_number}/9 complete"
+            )
+
+        # 18 clicks = 9 lines
+        if len(vertical_points) == 18:
+
+            mode = "done"
+
+            calculate_grid()
+
+            print()
+            print("CALIBRATION COMPLETE")
+            print("Press 'c' if you want to recalibrate.")
+
+
+def draw_calibration(frame):
+    """
+    Draw all calibration points and lines
+    onto the current live camera frame.
+    """
+
+    # ------------------------------------------------
+    # HORIZONTAL LINES
+    # ------------------------------------------------
+
+    for i, point in enumerate(horizontal_points):
+
+        cv2.circle(
+            frame,
+            point,
+            5,
+            (0, 0, 255),
+            -1
+        )
+
+        # Draw completed pairs
+        if i % 2 == 1:
+
+            p1 = horizontal_points[i - 1]
+            p2 = horizontal_points[i]
+
+            cv2.line(
+                frame,
+                p1,
+                p2,
+                (0, 255, 0),
+                2
+            )
+
+    # ------------------------------------------------
+    # VERTICAL LINES
+    # ------------------------------------------------
+
+    for i, point in enumerate(vertical_points):
+
+        cv2.circle(
+            frame,
+            point,
+            5,
+            (255, 0, 0),
+            -1
+        )
+
+        # Draw completed pairs
+        if i % 2 == 1:
+
+            p1 = vertical_points[i - 1]
+            p2 = vertical_points[i]
+
+            cv2.line(
+                frame,
+                p1,
+                p2,
+                (255, 0, 0),
+                2
+            )
+
+    # ------------------------------------------------
+    # GRID INTERSECTIONS
+    # ------------------------------------------------
+
+    if grid is not None:
+
+        for row in grid:
+
+            for point in row:
+
+                if point is not None:
+
+                    cv2.circle(
+                        frame,
+                        point,
+                        3,
+                        (0, 0, 255),
+                        -1
+                    )
+
+    # ------------------------------------------------
+    # Instructions on screen
+    # ------------------------------------------------
+
+    if mode == "horizontal":
+
+        line_number = len(horizontal_points) // 2 + 1
+
+        text = f"Horizontal {min(line_number, 9)}/9: LEFT then RIGHT"
+
+    elif mode == "vertical":
+
+        line_number = len(vertical_points) // 2 + 1
+
+        text = f"Vertical {min(line_number, 9)}/9: TOP then BOTTOM"
+
+    else:
+
+        text = "GRID COMPLETE"
+
+    cv2.putText(
+        frame,
+        text,
+        (10, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 255),
+        2
+    )
+
+
+# ============================================================
+# CAMERA SETUP
+# ============================================================
+
+picam2 = Picamera2()
+
+config = picam2.create_preview_configuration(
+    main={
+        "size": (FRAME_WIDTH, FRAME_HEIGHT)
+    }
+)
+
+picam2.configure(config)
+
+
+try:
+
+    picam2.start()
+
+    window_name = "Live Feed - Manual Chess Grid"
+
+    cv2.namedWindow(window_name)
+
+    cv2.setMouseCallback(
+        window_name,
+        click_event
+    )
+
+
+    print("""
+MANUAL CHESSBOARD CALIBRATION
+
+STEP 1: HORIZONTAL BOUNDARIES
+
+For each boundary:
+
+    LEFT click
+    RIGHT click
+
+Start at the TOP boundary.
+
+Work downward.
+
+You will make 9 horizontal lines.
+
+
+STEP 2: VERTICAL BOUNDARIES
+
+For each boundary:
+
+    TOP click
+    BOTTOM click
+
+Start at the LEFT boundary.
+
+Work toward the right.
+
+You will make 9 vertical lines.
+
+
+CONTROLS
+
+c = clear calibration
+q = quit
+""")
+
+
+    # ========================================================
+    # LIVE CAMERA LOOP
+    # ========================================================
+
+    while True:
+
+        frame = picam2.capture_array()
+
+        img = cv2.cvtColor(
+            frame,
+            cv2.COLOR_RGB2BGR
+        )
+
+        # Draw calibration over live feed
+        draw_calibration(img)
+
+        cv2.imshow(
+            window_name,
+            img
+        )
+
+
+        key = cv2.waitKey(1) & 0xFF
+
+
+        # Quit
+        if key == ord('q'):
+            break
+
+
+        # Reset calibration
+        elif key == ord('c'):
+
+            horizontal_points.clear()
+            vertical_points.clear()
+
+            grid = None
+            mode = "horizontal"
+
+            print("\nCalibration reset.")
+            print("Start horizontal boundaries again.")
+            print("TOP -> BOTTOM")
+            print("LEFT endpoint -> RIGHT endpoint")
+
+
+finally:
+
+    cv2.destroyAllWindows()
+
+    picam2.stop()
+    picam2.close()

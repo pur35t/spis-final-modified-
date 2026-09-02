@@ -1,0 +1,48 @@
+import cv2
+import numpy as np
+
+# This list will store our 4 clicked corner points
+points = []
+
+def click_event(event, x, y, flags, params):
+    if event == cv2.EVENT_LBUTTONDOWN:
+        points.append([x, y])
+        # Draw a little red circle where you clicked
+        cv2.circle(img, (x, y), 5, (0, 0, 255), -1)
+        cv2.imshow("Setup - Click 4 Corners clockwise from Top-Left", img)
+        
+        # Once we have 4 points, warp the image
+        if len(points) == 4:
+            warp_board()
+
+def warp_board():
+    # Define the 4 corners you clicked
+    pts1 = np.float32(points)
+    
+    # Define the perfect square dimensions we want to warp IT into (e.g., 400x400 pixels)
+    pts2 = np.float32([[0, 0], [400, 0], [400, 400], [0, 400]])
+    
+    # Calculate the correction matrix and warp the image
+    matrix = cv2.getPerspectiveTransform(pts1, pts2)
+    flattened_board = cv2.warpPerspective(img, matrix, (400, 400))
+    
+    # Visual proof: Draw the 8x8 grid lines over your warped board
+    for i in range(1, 8):
+        spacing = int(400 / 8) * i
+        cv2.line(flattened_board, (spacing, 0), (spacing, 400), (0, 255, 0), 1)
+        cv2.line(flattened_board, (0, spacing), (400, spacing), (0, 255, 0), 1)
+
+    cv2.imshow("Perfectly Flattened 8x8 Grid", flattened_board)
+
+# 1. Open your camera (0 is usually the built-in or default webcam)
+cap = cv2.VideoCapture(0)
+success, img = cap.read()
+
+if success:
+    cv2.imshow("Setup - Click 4 Corners clockwise from Top-Left", img)
+    # Set the mouse callback function to detect clicks
+    cv2.setMouseCallback("Setup - Click 4 Corners clockwise from Top-Left", click_event)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+else:
+    print("Camera not found. Check your connections.")
